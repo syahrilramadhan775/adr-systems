@@ -1,0 +1,79 @@
+name: adr-system
+
+volumes:
+  postgres_data:
+
+networks:
+  adr-net:
+    driver: bridge
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: adr-system
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: toor
+    ports:
+      - "2001:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks:
+      - adr-net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      DATABASE_URL: postgresql://postgres:toor@db:5432/adr-system
+      JWT_SECRET: ${JWT_SECRET:-dev-only-change-this-secret-before-deploying-adr-system}
+      JWT_EXPIRES_IN: 8h
+      CORS_ORIGIN: http://localhost:2000
+    ports:
+      - "4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "npm run db:migrate && npm run db:seed && npm start"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+      start_period: 15s
+    networks:
+      - adr-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_URL: http://backend:4000
+      PORT: "2000"
+    ports:
+      - "2000:2000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:2000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+      start_period: 20s
+    networks:
+      - adr-net
